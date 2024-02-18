@@ -36,8 +36,15 @@ pub enum Litr {
 #[repr(C)]
 #[derive(Debug, Clone)]
 pub struct Instance {
-  pub cls: Class,
-  pub v: [usize;2],
+  pub v1:usize,
+  pub v2:usize,
+  cls: Class
+}
+impl Instance {
+  pub fn set(&mut self, v1:usize, v2:usize) {
+    self.v1 = v1;
+    self.v2 = v2;
+  }
 }
 
 /// 函数枚举
@@ -50,7 +57,7 @@ pub enum Function {
 
 
 pub type NativeFn = fn(Vec<Litr>)-> Litr;
-pub type NativeMethod = fn(kself:&mut Litr, Vec<Litr>)-> Litr;
+pub type NativeMethod = fn(v: &mut Instance, args:Vec<Litr>)-> Litr;
 pub type Getter = fn(get:Interned)-> Litr;
 pub type Setter = fn(set:Interned, to:Litr);
 pub type IndexGetter = fn(get:usize)-> Litr;
@@ -64,6 +71,8 @@ fn setter(_set:Interned, _to:Litr) {}
 fn igetter(_get:usize)-> Litr {Litr::Uninit}
 /// index setter占位符
 fn isetter(_set:usize, _to:Litr) {}
+/// onclone ondrop的占位符
+fn method(_v:&mut Instance, _args:Vec<Litr>)-> Litr {Litr::Uninit}
 
 
 /// INTERN占位符，不应当被可及(needs to be unreachable)
@@ -91,18 +100,20 @@ pub struct ClassInner {
   setter: Setter,
   igetter: IndexGetter,
   isetter: IndexSetter,
+  onclone: NativeMethod,
+  ondrop: NativeMethod,
   statics: Vec<(Interned, NativeFn)>,
   methods: Vec<(Interned, NativeMethod)>
 }
 
 /// 原生类型指针
+/// 
+/// 使用时会提示static mut需要unsafe块，可以包个大unsafe块专门写Class内容
 #[repr(transparent)]
 #[derive(Debug, Clone, Copy)]
 pub struct Class {
   p: *mut ClassInner
 }
-// Class只在main期单线程追加方法，不应有其他写入的情况
-unsafe impl Sync for Class {}
 impl Class {
   /// 为static创建一个空指针
   /// 
@@ -111,21 +122,22 @@ impl Class {
     Class { p: std::ptr::null_mut() }
   }
   /// 为Class内部创建一个新类
-  #[allow(invalid_reference_casting)]
-  pub fn new(&self, name:&[u8]) {
+  /// 
+  /// 重复调用会引起一个ClassInner的内存泄漏
+  pub fn new(&mut self, name:&[u8]) {
     let v = ClassInner { 
-      name:intern(name), getter, setter, igetter, isetter, statics: Vec::new(), methods: Vec::new() 
+      name:intern(name), 
+      getter, setter, igetter, isetter, 
+      onclone: method, ondrop: method, 
+      statics: Vec::new(), methods: Vec::new() 
     };
-    let src = Class {p:Box::into_raw(Box::new(v))};
-    // 这一行本来是Undefined Behavior，如果你的程序编译过有问题就把&self 改成&mut self然后直接写入self.p
-    // 相当于直接演绎内部可变性，见UnsafeCell::get
-    unsafe{ std::ptr::write(self as *const Self as *mut Self, src)}
+    self.p = Box::into_raw(Box::new(v))
   }
   /// 为此类创建一个实例
   /// 
   /// v是两个指针长度的内容，可以传任何东西然后as或者transmute
-  pub fn create(&self, v:[usize;2])-> Instance {
-    Instance { cls: *self, v }
+  pub fn create(&self, v1:usize, v2:usize)-> Box<Instance> {
+    Box::new(Instance { cls: self.clone(), v1, v2 })
   }
   /// 设置getter, 用来处理.运算符
   pub fn getter(&self, f:Getter) {
