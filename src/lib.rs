@@ -1,18 +1,20 @@
 #![allow(unused)]
-mod structs;
 mod key;
+use key::*;
 
-use structs::Litr;
-use key::{
-  export_func,
-};
+static mut OKK:Class = Class::uninit();
 
 fn test(args:Vec<Litr>)->Litr {
-  println!("哎呀{args:?}");
+  println!("呃呃{args:?}");
   Litr::Uninit
 }
-
-#[export_name = "keymain"]
-extern fn main() {
-  export_func(b"test", test);
+fn new(_args:Vec<Litr>)-> Litr {
+  Litr::Float(2.024)
 }
+
+pub fn main(module: &mut NativeInterface) {unsafe{
+  OKK.new(b"Okk");
+  module.export_cls(OKK);
+  OKK.static_method(b"new", new);
+  module.export_fn(b"test", test);
+}}
