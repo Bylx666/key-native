@@ -1,6 +1,8 @@
 //! 由于已经决定了Rust为唯一Native编程语言，就不需要考虑C的行为了
 //! 
 //! 数据类型和调用约定都可以直接使用Rust标准库
+#![allow(unused)]
+
 type Scope = ();
 #[derive(Debug, Clone, Copy)]
 pub struct Interned {
@@ -10,6 +12,11 @@ impl std::ops::Deref for Interned {
   type Target = [u8];
   fn deref(&self) -> &Self::Target {
     &*self.p
+  }
+}
+impl std::fmt::Display for Interned{
+  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    f.write_str(&String::from_utf8_lossy(&self.p))
   }
 }
 
@@ -57,20 +64,20 @@ pub enum Function {
 
 
 pub type NativeFn = fn(Vec<Litr>)-> Litr;
-pub type NativeMethod = fn(v: &mut Instance, args:Vec<Litr>)-> Litr;
-pub type Getter = fn(get:Interned)-> Litr;
-pub type Setter = fn(set:Interned, to:Litr);
-pub type IndexGetter = fn(get:usize)-> Litr;
-pub type IndexSetter = fn(set:usize, to:Litr);
+pub type NativeMethod = fn(&mut Instance, args:Vec<Litr>)-> Litr;
+pub type Getter = fn(&mut Instance, get:Interned)-> Litr;
+pub type Setter = fn(&mut Instance, set:Interned, to:Litr);
+pub type IndexGetter = fn(&mut Instance, get:usize)-> Litr;
+pub type IndexSetter = fn(&mut Instance, set:usize, to:Litr);
 
 /// Getter占位符，什么都不做
-fn getter(_get:Interned)-> Litr {Litr::Uninit}
+fn getter(_v:&mut Instance, _get:Interned)-> Litr {Litr::Uninit}
 /// Setter占位符
-fn setter(_set:Interned, _to:Litr) {}
+fn setter(_v:&mut Instance, _set:Interned, _to:Litr) {}
 /// index gettet占位符
-fn igetter(_get:usize)-> Litr {Litr::Uninit}
+fn igetter(_v:&mut Instance, _get:usize)-> Litr {Litr::Uninit}
 /// index setter占位符
-fn isetter(_set:usize, _to:Litr) {}
+fn isetter(_v:&mut Instance, _set:usize, _to:Litr) {}
 /// onclone ondrop的占位符
 fn method(_v:&mut Instance, _args:Vec<Litr>)-> Litr {Litr::Uninit}
 
@@ -136,8 +143,8 @@ impl Class {
   /// 为此类创建一个实例
   /// 
   /// v是两个指针长度的内容，可以传任何东西然后as或者transmute
-  pub fn create(&self, v1:usize, v2:usize)-> Box<Instance> {
-    Box::new(Instance { cls: self.clone(), v1, v2 })
+  pub fn create(&self, v1:usize, v2:usize)-> Litr {
+    Litr::Ninst(Box::new(Instance { cls: self.clone(), v1, v2 }))
   }
   /// 设置getter, 用来处理.运算符
   pub fn getter(&self, f:Getter) {
