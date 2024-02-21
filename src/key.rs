@@ -3,6 +3,8 @@
 //! 数据类型和调用约定都可以直接使用Rust标准库
 #![allow(unused)]
 
+use std::collections::HashMap;
+
 type Scope = ();
 #[derive(Debug, Clone, Copy)]
 pub struct Interned {
@@ -30,13 +32,13 @@ pub enum Litr {
   Float  (f64),
   Bool   (bool),
 
-  Func   (Box<Function>), 
-  Str    (Box<String>),
-  Buffer (Box<Vec<u8>>),
-  List   (Box<Vec<Litr>>),
-  Obj,
-  Inst   (Box<()>),
-  Ninst  (Box<Instance>)
+  Func   (Function), 
+  Str    (String),
+  Buffer (Vec<u8>),
+  List   (Vec<Litr>),
+  Obj    (HashMap<Interned, Litr>),
+  Inst   (Instance),
+  Ninst  (Instance)
 }
 
 /// 原生类型实例
@@ -63,12 +65,47 @@ pub enum Function {
 }
 
 
-pub type NativeFn = fn(Vec<Litr>)-> Litr;
-pub type NativeMethod = fn(&mut Instance, args:Vec<Litr>)-> Litr;
+/// 可能是引用的Litr
+pub enum LitrRef {
+  Ref(*mut Litr),
+  Own(Litr)
+}
+impl LitrRef {
+  /// 消耗CalcRef返回内部值
+  pub fn own(self)-> Litr {
+    match self {
+      LitrRef::Ref(p)=> unsafe {(*p).clone()}
+      LitrRef::Own(v)=> v
+    }
+  }
+}
+impl std::ops::Deref for LitrRef {
+  type Target = Litr;
+  fn deref(&self) -> &Self::Target {
+    match self {
+      LitrRef::Ref(p)=> unsafe{&**p},
+      LitrRef::Own(b)=> b
+    }
+  }
+}
+impl std::ops::DerefMut for LitrRef {
+  fn deref_mut(&mut self) -> &mut Self::Target {
+    match self {
+      LitrRef::Ref(p)=> unsafe{&mut **p},
+      LitrRef::Own(b)=> b
+    }
+  }
+}
+
+
+pub type NativeFn = fn(Vec<LitrRef>)-> Litr;
+pub type NativeMethod = fn(&mut Instance, args:Vec<LitrRef>)-> Litr;
 pub type Getter = fn(&mut Instance, get:Interned)-> Litr;
 pub type Setter = fn(&mut Instance, set:Interned, to:Litr);
 pub type IndexGetter = fn(&mut Instance, get:usize)-> Litr;
 pub type IndexSetter = fn(&mut Instance, set:usize, to:Litr);
+pub type OnClone = fn(&mut Instance)-> Instance;
+pub type OnDrop = fn(&mut Instance);
 
 /// Getter占位符，什么都不做
 fn getter(_v:&mut Instance, _get:Interned)-> Litr {Litr::Uninit}
@@ -78,8 +115,10 @@ fn setter(_v:&mut Instance, _set:Interned, _to:Litr) {}
 fn igetter(_v:&mut Instance, _get:usize)-> Litr {Litr::Uninit}
 /// index setter占位符
 fn isetter(_v:&mut Instance, _set:usize, _to:Litr) {}
-/// onclone ondrop的占位符
-fn method(_v:&mut Instance, _args:Vec<Litr>)-> Litr {Litr::Uninit}
+/// onclone占位符
+fn onclone(v:&mut Instance)-> Instance {v.clone()}
+/// ondrop占位符
+fn ondrop(_v:&mut Instance) {}
 
 
 /// INTERN占位符，不应当被可及(needs to be unreachable)
@@ -107,8 +146,8 @@ pub struct ClassInner {
   setter: Setter,
   igetter: IndexGetter,
   isetter: IndexSetter,
-  onclone: NativeMethod,
-  ondrop: NativeMethod,
+  onclone: OnClone,
+  ondrop: OnDrop,
   statics: Vec<(Interned, NativeFn)>,
   methods: Vec<(Interned, NativeMethod)>
 }
@@ -135,7 +174,7 @@ impl Class {
     let v = ClassInner { 
       name:intern(name), 
       getter, setter, igetter, isetter, 
-      onclone: method, ondrop: method, 
+      onclone, ondrop, 
       statics: Vec::new(), methods: Vec::new() 
     };
     self.p = Box::into_raw(Box::new(v))
@@ -144,7 +183,7 @@ impl Class {
   /// 
   /// v是两个指针长度的内容，可以传任何东西然后as或者transmute
   pub fn create(&self, v1:usize, v2:usize)-> Litr {
-    Litr::Ninst(Box::new(Instance { cls: self.clone(), v1, v2 }))
+    Litr::Ninst(Instance { cls: self.clone(), v1, v2 })
   }
   /// 设置getter, 用来处理.运算符
   pub fn getter(&self, f:Getter) {
@@ -173,6 +212,8 @@ impl Class {
 }
 
 /// Ks解释器对Native做出的接口
+/// 
+/// 在main外调用内部函数是UB
 #[repr(C)]
 pub struct NativeInterface {
   intern: fn(&[u8])-> Interned,

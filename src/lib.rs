@@ -4,15 +4,15 @@ use key::*;
 
 static mut FLOAT_ARRAY:Class = Class::uninit();
 
-fn test(args:Vec<Litr>)->Litr {
-  println!("示例函数:{args:?}");
+fn test(args:Vec<LitrRef>)->Litr {
+  println!("示例函数:{:?}", &*args[0]);
   Litr::Uninit
 }
-fn sample_new(_args:Vec<Litr>)-> Litr {
+fn sample_new(_args:Vec<LitrRef>)-> Litr {
   let inst = unsafe { FLOAT_ARRAY.create(24, 56) };
   inst
 }
-fn sample_see(v:&mut Instance, _args:Vec<Litr>)-> Litr {
+fn sample_see(v:&mut Instance, _args:Vec<LitrRef>)-> Litr {
   println!("{} {}", v.v1, v.v2);
   Litr::Uninit
 }
