@@ -22,7 +22,6 @@ impl std::fmt::Display for Interned{
   }
 }
 
-#[repr(C)]
 #[derive(Debug, Clone)]
 pub enum Litr {
   Uninit,
@@ -37,8 +36,20 @@ pub enum Litr {
   Buffer (Vec<u8>),
   List   (Vec<Litr>),
   Obj    (HashMap<Interned, Litr>),
-  Inst   (Instance),
-  Ninst  (Instance)
+  Inst   (()),
+  Ninst  (Instance),
+  Sym    (Symbol)
+}
+
+#[derive(Debug, Clone)]
+pub enum Symbol {
+  IterEnd,
+  Reserved
+}
+impl Symbol {
+  pub fn iter_end()-> Litr {
+    Litr::Sym(Symbol::IterEnd)
+  }
 }
 
 /// 原生类型实例
@@ -142,14 +153,14 @@ pub fn err(s:&str)->! {
 #[derive(Debug, Clone)]
 pub struct ClassInner {
   name: Interned,
+  statics: Vec<(Interned, NativeFn)>,
+  methods: Vec<(Interned, NativeMethod)>,
   getter: Getter,
   setter: Setter,
   igetter: IndexGetter,
   isetter: IndexSetter,
   onclone: OnClone,
   ondrop: OnDrop,
-  statics: Vec<(Interned, NativeFn)>,
-  methods: Vec<(Interned, NativeMethod)>
 }
 
 /// 原生类型指针
@@ -170,9 +181,9 @@ impl Class {
   /// 为Class内部创建一个新类
   /// 
   /// 重复调用会引起一个ClassInner的内存泄漏
-  pub fn new(&mut self, name:&[u8]) {
+  pub fn new(&mut self, name:&str) {
     let v = ClassInner { 
-      name:intern(name), 
+      name:intern(name.as_bytes()), 
       getter, setter, igetter, isetter, 
       onclone, ondrop, 
       statics: Vec::new(), methods: Vec::new() 
@@ -202,12 +213,12 @@ impl Class {
     unsafe{(*self.p).isetter = f;}
   }
   /// 添加一个方法
-  pub fn method(&self, name:&[u8], f:NativeMethod) {
-    unsafe{(*self.p).methods.push((intern(name), f));}
+  pub fn method(&self, name:&str, f:NativeMethod) {
+    unsafe{(*self.p).methods.push((intern(name.as_bytes()), f));}
   }
   /// 添加一个静态方法
-  pub fn static_method(&self, name:&[u8], f:NativeFn) {
-     unsafe{(*self.p).statics.push((intern(name), f));}
+  pub fn static_method(&self, name:&str, f:NativeFn) {
+     unsafe{(*self.p).statics.push((intern(name.as_bytes()), f));}
   }
 }
 
@@ -224,8 +235,8 @@ pub struct NativeInterface {
 
 impl NativeInterface {
   /// 导出函数
-  pub fn export_fn(&mut self, name:&[u8], f:NativeFn) {
-    unsafe{&mut *self.funcs}.push((intern(name), f))
+  pub fn export_fn(&mut self, name:&str, f:NativeFn) {
+    unsafe{&mut *self.funcs}.push((intern(name.as_bytes()), f))
   }
   /// 导出一个类
   /// 
