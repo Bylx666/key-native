@@ -2,14 +2,14 @@
 mod key;
 use key::*;
 
-static mut SAMPLE:Class = Class::uninit();
+static SAMPLE:Class = Class::uninit();
 
 fn test(args:Vec<LitrRef>)->Litr {
   println!("示例函数:{:?}", &*args[0]);
   Litr::Uninit
 }
 fn sample_new(_args:Vec<LitrRef>)-> Litr {
-  let inst = unsafe { SAMPLE.create(0, 15) };
+  let inst = SAMPLE.create(0, 15);
   inst
 }
 fn sample_see(v:&mut Instance, _args:Vec<LitrRef>)-> Litr {
@@ -23,24 +23,39 @@ fn sample_getter(_v:&mut Instance, get:Interned)-> Litr {
 fn sample_setter(_v:&mut Instance, set:Interned, to:Litr) {
   println!("dll set: {set}, {to:?}");
 }
-fn next(v:&mut Instance, _:Vec<LitrRef>)-> Litr {
-  if v.v2<v.v1 {
-    return Symbol::iter_end();
-  }
-  let res = Litr::Uint(v.v1);
-  v.v1 += 1;
-  res
-}
 
 pub fn main(module: &mut NativeInterface) {
-  unsafe {
-    SAMPLE.new("Sample");
-    module.export_cls(SAMPLE);
-    SAMPLE.static_method("new", sample_new);
-    SAMPLE.method("see", sample_see);
-    SAMPLE.method("@next", next);
-    SAMPLE.getter(sample_getter);
-    SAMPLE.setter(sample_setter);
-  }
+  SAMPLE.new("Sample");
+  module.export_cls(SAMPLE.clone());
+  SAMPLE.onclone(|v|{
+    println!("cloned!");
+    v.clone()
+  });
+  SAMPLE.next(|v|{
+    if v.v2<v.v1 {
+      return Symbol::iter_end();
+    }
+    let res = Litr::Uint(v.v1);
+    v.v1 += 1;
+    res
+  });
+  SAMPLE.index_get(|_v,i|{
+    println!("get:[{:?}]",&*i);
+    Litr::Float(2.55)
+  });
+  SAMPLE.index_set(|_v,i,val|{
+    println!("set:[{:?}] = {:?}", &*i, &*val);
+  });
+  SAMPLE.onclone(|v|{
+    println!("clone!");
+    v.clone()
+  });
+  SAMPLE.ondrop(|_|{
+    println!("drop!");
+  });
+  SAMPLE.static_method("new", sample_new);
+  SAMPLE.method("see", sample_see);
+  SAMPLE.getter(sample_getter);
+  SAMPLE.setter(sample_setter);
   module.export_fn("test", test);
 }

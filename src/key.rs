@@ -3,7 +3,7 @@
 //! 数据类型和调用约定都可以直接使用Rust标准库
 #![allow(unused)]
 
-use std::collections::HashMap;
+use std::{cell::UnsafeCell, collections::HashMap};
 
 type Scope = ();
 #[derive(Debug, Clone, Copy)]
@@ -113,24 +113,16 @@ pub type NativeFn = fn(Vec<LitrRef>)-> Litr;
 pub type NativeMethod = fn(&mut Instance, args:Vec<LitrRef>)-> Litr;
 pub type Getter = fn(&mut Instance, get:Interned)-> Litr;
 pub type Setter = fn(&mut Instance, set:Interned, to:Litr);
-pub type IndexGetter = fn(&mut Instance, get:usize)-> Litr;
-pub type IndexSetter = fn(&mut Instance, set:usize, to:Litr);
-pub type OnClone = fn(&mut Instance)-> Instance;
-pub type OnDrop = fn(&mut Instance);
 
 /// Getter占位符，什么都不做
 fn getter(_v:&mut Instance, _get:Interned)-> Litr {Litr::Uninit}
 /// Setter占位符
 fn setter(_v:&mut Instance, _set:Interned, _to:Litr) {}
-/// index gettet占位符
-fn igetter(_v:&mut Instance, _get:usize)-> Litr {Litr::Uninit}
-/// index setter占位符
-fn isetter(_v:&mut Instance, _set:usize, _to:Litr) {}
-/// onclone占位符
-fn onclone(v:&mut Instance)-> Instance {v.clone()}
-/// ondrop占位符
+fn index_get(_v:&mut Instance, _get:LitrRef)-> Litr {Litr::Uninit}
+fn index_set(_v:&mut Instance, _set:LitrRef, _to:LitrRef) {}
+fn next(_v:&mut Instance)-> Litr {Symbol::iter_end()}
+fn onclone(v:&mut Instance)-> Instance {unsafe{&*v}.clone()}
 fn ondrop(_v:&mut Instance) {}
-
 
 /// INTERN占位符，不应当被可及(needs to be unreachable)
 fn _intern(s:&[u8])-> Interned {unsafe{std::mem::transmute(1usize)}}
@@ -157,38 +149,53 @@ pub struct ClassInner {
   methods: Vec<(Interned, NativeMethod)>,
   getter: Getter,
   setter: Setter,
-  igetter: IndexGetter,
-  isetter: IndexSetter,
-  onclone: OnClone,
-  ondrop: OnDrop,
+  index_get: fn(&mut Instance, LitrRef)-> Litr,
+  index_set: fn(&mut Instance, LitrRef, LitrRef),
+  next: fn(&mut Instance)-> Litr,
+  onclone: fn(&mut Instance)-> Instance,
+  ondrop: fn(&mut Instance)
 }
 
 /// 原生类型指针
-/// 
-/// 使用时会提示static mut需要unsafe块，可以包个大unsafe块专门写Class内容
 #[repr(transparent)]
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug)]
 pub struct Class {
-  p: *mut ClassInner
+  p: UnsafeCell<*mut ClassInner>
 }
+impl Clone for Class {
+  fn clone(&self) -> Self {
+    Class {p: UnsafeCell::new(unsafe{*self.p.get()})}
+  }
+}
+unsafe impl Sync for Class {}
+
+macro_rules! impl_class_setter {($($doc:literal $f:ident($t:ty);)*) => {
+  $(
+    #[doc = $doc]
+    pub fn $f(&self, f:$t) {
+      unsafe{(**self.p.get()).$f = f;}
+    }
+  )*
+}}
 impl Class {
   /// 为static创建一个空指针
   /// 
   /// 要在此后调用其new方法才能访问
   pub const fn uninit()-> Self {
-    Class { p: std::ptr::null_mut() }
+    Class { p: UnsafeCell::new(std::ptr::null_mut()) }
   }
   /// 为Class内部创建一个新类
   /// 
   /// 重复调用会引起一个ClassInner的内存泄漏
-  pub fn new(&mut self, name:&str) {
+  pub fn new(&self, name:&str) {
     let v = ClassInner { 
       name:intern(name.as_bytes()), 
-      getter, setter, igetter, isetter, 
-      onclone, ondrop, 
-      statics: Vec::new(), methods: Vec::new() 
+      getter, setter, 
+      statics: Vec::new(), methods: Vec::new() ,
+      index_get, index_set,
+      next, onclone, ondrop
     };
-    self.p = Box::into_raw(Box::new(v))
+    unsafe{*self.p.get() = Box::into_raw(Box::new(v))}
   }
   /// 为此类创建一个实例
   /// 
@@ -196,29 +203,29 @@ impl Class {
   pub fn create(&self, v1:usize, v2:usize)-> Litr {
     Litr::Ninst(Instance { cls: self.clone(), v1, v2 })
   }
-  /// 设置getter, 用来处理.运算符
-  pub fn getter(&self, f:Getter) {
-    unsafe{(*self.p).getter = f;}
-  }
-  /// 设置setter, 用来处理a.b = c的写法
-  pub fn setter(&self, f:Setter) {
-    unsafe{(*self.p).setter = f;}
-  }
-  /// 设置index getter, 返回a[i]的值
-  pub fn igetter(&self, f:IndexGetter) {
-    unsafe{(*self.p).igetter = f;}
-  }
-  /// 设置index setter, 处理a[i] = b
-  pub fn isetter(&self, f:IndexSetter) {
-    unsafe{(*self.p).isetter = f;}
+  impl_class_setter!{
+    "设置getter, 用来处理`.`运算符"
+    getter(Getter);
+    "设置setter, 用来处理a.b = c的写法"
+    setter(Setter);
+    "设置index getter, 返回a[i]的值"
+    index_get(fn(&mut Instance, LitrRef)-> Litr);
+    "设置index setter, 处理a[i] = b"
+    index_set(fn(&mut Instance, LitrRef, LitrRef));
+    "设置迭代器, 处理for n:instance {}"
+    next(fn(&mut Instance)-> Litr);
+    "自定义复制行为(往往是赋值和传参)"
+    onclone(fn(&mut Instance)-> Instance);
+    "自定义垃圾回收回收行为(只需要写额外工作,不需要drop此指针)"
+    ondrop(fn(&mut Instance));
   }
   /// 添加一个方法
   pub fn method(&self, name:&str, f:NativeMethod) {
-    unsafe{(*self.p).methods.push((intern(name.as_bytes()), f));}
+    unsafe{(**self.p.get()).methods.push((intern(name.as_bytes()), f));}
   }
   /// 添加一个静态方法
   pub fn static_method(&self, name:&str, f:NativeFn) {
-     unsafe{(*self.p).statics.push((intern(name.as_bytes()), f));}
+     unsafe{(**self.p.get()).statics.push((intern(name.as_bytes()), f));}
   }
 }
 
