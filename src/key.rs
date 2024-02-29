@@ -127,11 +127,35 @@ impl std::ops::DerefMut for LitrRef {
   }
 }
 
+/// 原生类型实例版的LitrRef
+#[derive(Debug, Clone)]
+pub enum InstanceRef {
+  Ref(*mut Instance),
+  Own(Instance)
+}
+impl std::ops::Deref for InstanceRef {
+  type Target = Instance;
+  fn deref(&self) -> &Self::Target {
+    match self {
+      InstanceRef::Ref(p)=> unsafe{&**p},
+      InstanceRef::Own(b)=> b
+    }
+  }
+}
+impl std::ops::DerefMut for InstanceRef {
+  fn deref_mut(&mut self) -> &mut Self::Target {
+    match self {
+      InstanceRef::Ref(p)=> unsafe{&mut **p},
+      InstanceRef::Own(b)=> b
+    }
+  }
+}
+
 
 pub type NativeFn = fn(Vec<LitrRef>, Scope)-> Litr;
-pub type NativeMethod = fn(&mut Instance, args:Vec<LitrRef>, Scope)-> Litr;
-pub type Getter = fn(&mut Instance, get:Ident)-> Litr;
-pub type Setter = fn(&mut Instance, set:Ident, to:Litr);
+pub type NativeMethod = fn(InstanceRef, args:Vec<LitrRef>, Scope)-> Litr;
+pub type Getter = fn(InstanceRef, get:Ident)-> Litr;
+pub type Setter = fn(InstanceRef, set:Ident, to:Litr);
 
 /// intern函数本体。将其pub是未定义行为。
 static mut INTERN:fn(&[u8])-> Ident = |_|unsafe{std::mem::transmute(1usize)};

@@ -12,15 +12,15 @@ fn sample_new(_args:Vec<LitrRef>, _cx:Scope)-> Litr {
   let inst = SAMPLE.create(0, 15);
   inst
 }
-fn sample_see(v:&mut Instance, _args:Vec<LitrRef>, _cx:Scope)-> Litr {
+fn sample_see(v:InstanceRef, _args:Vec<LitrRef>, _cx:Scope)-> Litr {
   println!("{} {}", v.v1, v.v2);
   Litr::Uninit
 }
-fn sample_getter(_v:&mut Instance, get:Ident)-> Litr {
+fn sample_getter(_v:InstanceRef, get:Ident)-> Litr {
   println!("dll get: {get}");
   Litr::Uninit
 }
-fn sample_setter(_v:&mut Instance, set:Ident, to:Litr) {
+fn sample_setter(_v:InstanceRef, set:Ident, to:Litr) {
   println!("dll set: {set}, {to:?}");
 }
 
