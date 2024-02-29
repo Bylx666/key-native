@@ -5,20 +5,39 @@
 
 use std::{cell::UnsafeCell, collections::HashMap};
 
-type Scope = ();
+/// 一个合法的标识符, 可以理解为字符串的指针
 #[derive(Debug, Clone, Copy)]
-pub struct Interned {
+pub struct Ident {
   pub p: &'static Box<[u8]>
 }
-impl std::ops::Deref for Interned {
+impl Ident {
+  /// 将ident作为字符串
+  pub fn str(&self)-> String {
+    String::from_utf8_lossy(&self.p).into_owned()
+  }
+  /// 获得ident的slice
+  pub fn slice(&self)-> &[u8] {
+    self
+  }
+}
+impl std::ops::Deref for Ident {
   type Target = [u8];
   fn deref(&self) -> &Self::Target {
     &*self.p
   }
 }
-impl std::fmt::Display for Interned{
+impl std::fmt::Display for Ident{
   fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-    f.write_str(&String::from_utf8_lossy(&self.p))
+    f.write_str(&self.str())
+  }
+}
+
+static mut FIND_VAR:fn(Scope, Ident)->Option<LitrRef> = |_,_|None;
+#[derive(Debug, Clone, Copy)]
+pub struct Scope(*mut ());
+impl Scope {
+  pub fn find_var(self, s:&str)-> Option<LitrRef> {
+    unsafe{FIND_VAR(self, intern(s.as_bytes()))}
   }
 }
 
@@ -35,7 +54,7 @@ pub enum Litr {
   Str    (String),
   Buffer (Vec<u8>),
   List   (Vec<Litr>),
-  Obj    (HashMap<Interned, Litr>),
+  Obj    (HashMap<Ident, Litr>),
   Inst   (()),
   Ninst  (Instance),
   Sym    (Symbol)
@@ -109,33 +128,19 @@ impl std::ops::DerefMut for LitrRef {
 }
 
 
-pub type NativeFn = fn(Vec<LitrRef>)-> Litr;
-pub type NativeMethod = fn(&mut Instance, args:Vec<LitrRef>)-> Litr;
-pub type Getter = fn(&mut Instance, get:Interned)-> Litr;
-pub type Setter = fn(&mut Instance, set:Interned, to:Litr);
+pub type NativeFn = fn(Vec<LitrRef>, Scope)-> Litr;
+pub type NativeMethod = fn(&mut Instance, args:Vec<LitrRef>, Scope)-> Litr;
+pub type Getter = fn(&mut Instance, get:Ident)-> Litr;
+pub type Setter = fn(&mut Instance, set:Ident, to:Litr);
 
-/// Getter占位符，什么都不做
-fn getter(_v:&mut Instance, _get:Interned)-> Litr {Litr::Uninit}
-/// Setter占位符
-fn setter(_v:&mut Instance, _set:Interned, _to:Litr) {}
-fn index_get(_v:&mut Instance, _get:LitrRef)-> Litr {Litr::Uninit}
-fn index_set(_v:&mut Instance, _set:LitrRef, _to:LitrRef) {}
-fn next(_v:&mut Instance)-> Litr {Symbol::iter_end()}
-fn onclone(v:&mut Instance)-> Instance {unsafe{&*v}.clone()}
-fn ondrop(_v:&mut Instance) {}
-
-/// INTERN占位符，不应当被可及(needs to be unreachable)
-fn _intern(s:&[u8])-> Interned {unsafe{std::mem::transmute(1usize)}}
 /// intern函数本体。将其pub是未定义行为。
-static mut INTERN:fn(&[u8])-> Interned = _intern;
+static mut INTERN:fn(&[u8])-> Ident = |_|unsafe{std::mem::transmute(1usize)};
 /// 将字符串缓存为指针
-pub fn intern(s:&[u8])-> Interned {
+pub fn intern(s:&[u8])-> Ident {
   unsafe{ INTERN(s) }
 }
 
-/// err占位符，不应被可及
-fn _err(s:&str)->! {panic!()}
-static mut ERR:fn(&str)->! = _err;
+static mut ERR:fn(&str)->! = |s|panic!("{}",s);
 pub fn err(s:&str)->! {
   unsafe {ERR(s)}
 }
@@ -144,9 +149,9 @@ pub fn err(s:&str)->! {
 #[repr(C)]
 #[derive(Debug, Clone)]
 pub struct ClassInner {
-  name: Interned,
-  statics: Vec<(Interned, NativeFn)>,
-  methods: Vec<(Interned, NativeMethod)>,
+  name: Ident,
+  statics: Vec<(Ident, NativeFn)>,
+  methods: Vec<(Ident, NativeMethod)>,
   getter: Getter,
   setter: Setter,
   index_get: fn(&mut Instance, LitrRef)-> Litr,
@@ -190,10 +195,15 @@ impl Class {
   pub fn new(&self, name:&str) {
     let v = ClassInner { 
       name:intern(name.as_bytes()), 
-      getter, setter, 
-      statics: Vec::new(), methods: Vec::new() ,
-      index_get, index_set,
-      next, onclone, ondrop
+      getter:|_,_|Litr::Uninit, 
+      setter:|_,_,_|(), 
+      statics: Vec::new(), 
+      methods: Vec::new() ,
+      index_get:|_,_|Litr::Uninit, 
+      index_set:|_,_,_|(),
+      next:|_|Symbol::iter_end(), 
+      onclone:|v|v.clone(), 
+      ondrop:|_|()
     };
     unsafe{*self.p.get() = Box::into_raw(Box::new(v))}
   }
@@ -234,9 +244,10 @@ impl Class {
 /// 在main外调用内部函数是UB
 #[repr(C)]
 pub struct NativeInterface {
-  intern: fn(&[u8])-> Interned,
+  intern: fn(&[u8])-> Ident,
   err: fn(&str)->!,
-  funcs: *mut Vec<(Interned, NativeFn)>,
+  find_var: fn(Scope, Ident)-> Option<LitrRef>,
+  funcs: *mut Vec<(Ident, NativeFn)>,
   classes: *mut Vec<Class>
 }
 
@@ -258,6 +269,7 @@ extern fn _main(module: &mut NativeInterface) {
   unsafe {
     INTERN = module.intern;
     ERR = module.err;
+    FIND_VAR = module.find_var;
   }
   crate::main(module);
 }

@@ -4,23 +4,23 @@ use key::*;
 
 static SAMPLE:Class = Class::uninit();
 
-fn test(args:Vec<LitrRef>)->Litr {
-  println!("示例函数:{:?}", &*args[0]);
+fn test(_args:Vec<LitrRef>, _cx:Scope)->Litr {
+  println!("{:?}",&*_cx.find_var("a").unwrap());
   Litr::Uninit
 }
-fn sample_new(_args:Vec<LitrRef>)-> Litr {
+fn sample_new(_args:Vec<LitrRef>, _cx:Scope)-> Litr {
   let inst = SAMPLE.create(0, 15);
   inst
 }
-fn sample_see(v:&mut Instance, _args:Vec<LitrRef>)-> Litr {
+fn sample_see(v:&mut Instance, _args:Vec<LitrRef>, _cx:Scope)-> Litr {
   println!("{} {}", v.v1, v.v2);
   Litr::Uninit
 }
-fn sample_getter(_v:&mut Instance, get:Interned)-> Litr {
+fn sample_getter(_v:&mut Instance, get:Ident)-> Litr {
   println!("dll get: {get}");
   Litr::Uninit
 }
-fn sample_setter(_v:&mut Instance, set:Interned, to:Litr) {
+fn sample_setter(_v:&mut Instance, set:Ident, to:Litr) {
   println!("dll set: {set}, {to:?}");
 }
 
