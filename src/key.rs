@@ -3,7 +3,7 @@
 //! 数据类型和调用约定都可以直接使用Rust标准库
 #![allow(unused)]
 
-use std::{cell::UnsafeCell, collections::HashMap};
+use std::{cell::UnsafeCell, collections::HashMap, mem::transmute};
 
 /// 一个合法的标识符, 可以理解为字符串的指针
 #[derive(Debug, Clone, Copy)]
@@ -52,7 +52,7 @@ pub enum Litr {
 
   Func   (Function), 
   Str    (String),
-  Buffer (Vec<u8>),
+  Buf    (Vec<u8>),
   List   (Vec<Litr>),
   Obj    (HashMap<Ident, Litr>),
   Inst   (()),
@@ -75,15 +75,9 @@ impl Symbol {
 #[repr(C)]
 #[derive(Debug, Clone)]
 pub struct Instance {
-  pub v1:usize,
-  pub v2:usize,
-  cls: Class
-}
-impl Instance {
-  pub fn set(&mut self, v1:usize, v2:usize) {
-    self.v1 = v1;
-    self.v2 = v2;
-  }
+  pub v: usize,
+  pub w: usize,
+  pub cls: Class
 }
 
 /// 函数枚举
@@ -127,35 +121,9 @@ impl std::ops::DerefMut for LitrRef {
   }
 }
 
-/// 原生类型实例版的LitrRef
-#[derive(Debug, Clone)]
-pub enum InstanceRef {
-  Ref(*mut Instance),
-  Own(Instance)
-}
-impl std::ops::Deref for InstanceRef {
-  type Target = Instance;
-  fn deref(&self) -> &Self::Target {
-    match self {
-      InstanceRef::Ref(p)=> unsafe{&**p},
-      InstanceRef::Own(b)=> b
-    }
-  }
-}
-impl std::ops::DerefMut for InstanceRef {
-  fn deref_mut(&mut self) -> &mut Self::Target {
-    match self {
-      InstanceRef::Ref(p)=> unsafe{&mut **p},
-      InstanceRef::Own(b)=> b
-    }
-  }
-}
-
 
 pub type NativeFn = fn(Vec<LitrRef>, Scope)-> Litr;
-pub type NativeMethod = fn(InstanceRef, args:Vec<LitrRef>, Scope)-> Litr;
-pub type Getter = fn(InstanceRef, get:Ident)-> Litr;
-pub type Setter = fn(InstanceRef, set:Ident, to:Litr);
+pub type NativeMethod = fn(&mut Instance, args:Vec<LitrRef>, Scope)-> Litr;
 
 /// intern函数本体。将其pub是未定义行为。
 static mut INTERN:fn(&[u8])-> Ident = |_|unsafe{std::mem::transmute(1usize)};
@@ -176,12 +144,12 @@ pub struct ClassInner {
   name: Ident,
   statics: Vec<(Ident, NativeFn)>,
   methods: Vec<(Ident, NativeMethod)>,
-  getter: Getter,
-  setter: Setter,
-  index_get: fn(&mut Instance, LitrRef)-> Litr,
+  getter: fn(&Instance, get:Ident)-> Litr,
+  setter: fn(&mut Instance, set:Ident, to:Litr),
+  index_get: fn(&Instance, LitrRef)-> Litr,
   index_set: fn(&mut Instance, LitrRef, LitrRef),
   next: fn(&mut Instance)-> Litr,
-  onclone: fn(&mut Instance)-> Instance,
+  onclone: fn(&Instance)-> Instance,
   ondrop: fn(&mut Instance)
 }
 
@@ -234,22 +202,22 @@ impl Class {
   /// 为此类创建一个实例
   /// 
   /// v是两个指针长度的内容，可以传任何东西然后as或者transmute
-  pub fn create(&self, v1:usize, v2:usize)-> Litr {
-    Litr::Ninst(Instance { cls: self.clone(), v1, v2 })
+  pub fn create(&self, v:usize, w:usize)-> Litr {
+    Litr::Ninst(Instance { cls: self.clone(), v, w })
   }
   impl_class_setter!{
     "设置getter, 用来处理`.`运算符"
-    getter(Getter);
+    getter(fn(&Instance, get:Ident)-> Litr);
     "设置setter, 用来处理a.b = c的写法"
-    setter(Setter);
+    setter(fn(&mut Instance, set:Ident, to:Litr));
     "设置index getter, 返回a[i]的值"
-    index_get(fn(&mut Instance, LitrRef)-> Litr);
+    index_get(fn(&Instance, LitrRef)-> Litr);
     "设置index setter, 处理a[i] = b"
     index_set(fn(&mut Instance, LitrRef, LitrRef));
     "设置迭代器, 处理for n:instance {}"
     next(fn(&mut Instance)-> Litr);
     "自定义复制行为(往往是赋值和传参)"
-    onclone(fn(&mut Instance)-> Instance);
+    onclone(fn(&Instance)-> Instance);
     "自定义垃圾回收回收行为(只需要写额外工作,不需要drop此指针)"
     ondrop(fn(&mut Instance));
   }

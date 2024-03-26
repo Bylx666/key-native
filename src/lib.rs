@@ -1,47 +1,42 @@
-
+#![allow(unused)]
 mod key;
+use std::{alloc::{dealloc, Layout}, mem::transmute, ptr::drop_in_place};
+
 use key::*;
 
 static SAMPLE:Class = Class::uninit();
 
-fn test(_args:Vec<LitrRef>, _cx:Scope)->Litr {
-  println!("{:?}",&*_cx.find_var("a").unwrap());
-  Litr::Uninit
-}
-fn sample_new(_args:Vec<LitrRef>, _cx:Scope)-> Litr {
-  let inst = SAMPLE.create(0, 15);
-  inst
-}
-fn sample_see(v:InstanceRef, _args:Vec<LitrRef>, _cx:Scope)-> Litr {
-  println!("{} {}", v.v1, v.v2);
-  Litr::Uninit
-}
-fn sample_getter(_v:InstanceRef, get:Ident)-> Litr {
+fn sample_getter(_v:&Instance, get:Ident)-> Litr {
   println!("dll get: {get}");
   Litr::Uninit
 }
-fn sample_setter(_v:InstanceRef, set:Ident, to:Litr) {
+fn sample_setter(_v:&mut Instance, set:Ident, to:Litr) {
   println!("dll set: {set}, {to:?}");
 }
 
 pub fn main(module: &mut NativeInterface) {
-  SAMPLE.new("Sample");
+  SAMPLE.new("A");
+
   module.export_cls(SAMPLE.clone());
   SAMPLE.onclone(|v|{
     println!("cloned!");
     v.clone()
   });
   SAMPLE.next(|v|{
-    if v.v2<v.v1 {
+    if v.w<v.v {
       return Symbol::iter_end();
     }
-    let res = Litr::Uint(v.v1);
-    v.v1 += 1;
+    let res = Litr::Uint(v.v);
+    v.v += 1;
     res
   });
-  SAMPLE.index_get(|_v,i|{
-    println!("get:[{:?}]",&*i);
-    Litr::Float(2.55)
+  SAMPLE.index_get(|v,i|{
+    let n:&mut Vec<u8> = unsafe {transmute(v.v)};
+    let i = match &*i {
+      Litr::Int(n)=> *n as usize,
+      _=> 0
+    };
+    Litr::Uint(n[i] as usize)
   });
   SAMPLE.index_set(|_v,i,val|{
     println!("set:[{:?}] = {:?}", &*i, &*val);
@@ -50,12 +45,29 @@ pub fn main(module: &mut NativeInterface) {
     println!("clone!");
     v.clone()
   });
-  SAMPLE.ondrop(|_|{
-    println!("drop!");
+  SAMPLE.ondrop(|v|{
   });
-  SAMPLE.static_method("new", sample_new);
-  SAMPLE.method("see", sample_see);
+  SAMPLE.static_method("new", |_,_|{
+    let n = Box::into_raw(Box::new(vec![1,3,5,7u8]));
+    unsafe {
+      struct N (Vec<u8>);
+      impl Drop for N {
+        fn drop(&mut self) {
+          println!("drop")
+        }
+      }
+      let boxe = Box::into_raw(Box::new(N(vec![1,5,4,3])));
+      drop_in_place(boxe);
+      dealloc(boxe as _, Layout::new::<Vec<u8>>());
+      println!("{boxe:?} {:?}", (&*boxe).0);
+    };
+    let inst = SAMPLE.create(n as usize, 0);
+    inst
+  });
+  SAMPLE.method("see", |v,_,_|{
+    let n:&mut Vec<u8> = unsafe {transmute(v.v)};
+    Litr::Buf(n.clone())
+  });
   SAMPLE.getter(sample_getter);
   SAMPLE.setter(sample_setter);
-  module.export_fn("test", test);
 }
