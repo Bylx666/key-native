@@ -149,6 +149,7 @@ pub struct ClassInner {
   index_get: fn(&Instance, LitrRef)-> Litr,
   index_set: fn(&mut Instance, LitrRef, LitrRef),
   next: fn(&mut Instance)-> Litr,
+  to_str: fn(&Instance)-> String,
   onclone: fn(&Instance)-> Instance,
   ondrop: fn(&mut Instance)
 }
@@ -164,6 +165,7 @@ impl Clone for Class {
     Class {p: UnsafeCell::new(unsafe{*self.p.get()})}
   }
 }
+
 unsafe impl Sync for Class {}
 
 macro_rules! impl_class_setter {($($doc:literal $f:ident($t:ty);)*) => {
@@ -194,6 +196,7 @@ impl Class {
       index_get:|_,_|Litr::Uninit, 
       index_set:|_,_,_|(),
       next:|_|Symbol::iter_end(), 
+      to_str: |v|format!("{} {{ Native }}", unsafe{&**v.cls.p.get()}.name),
       onclone:|v|v.clone(), 
       ondrop:|_|()
     };
@@ -220,6 +223,8 @@ impl Class {
     onclone(fn(&Instance)-> Instance);
     "自定义垃圾回收回收行为(只需要写额外工作,不需要drop此指针)"
     ondrop(fn(&mut Instance));
+    "自定义Str::from得到的字符串"
+    to_str(fn(&Instance)-> String);
   }
   /// 添加一个方法
   pub fn method(&self, name:&str, f:NativeMethod) {

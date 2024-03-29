@@ -68,6 +68,7 @@ pub fn main(module: &mut NativeInterface) {
     let n:&mut Vec<u8> = unsafe {transmute(v.v)};
     Litr::Buf(n.clone())
   });
+  SAMPLE.to_str(|v|format!("A {{ {} }}", (v.v+v.w)));
   SAMPLE.getter(sample_getter);
   SAMPLE.setter(sample_setter);
 }
