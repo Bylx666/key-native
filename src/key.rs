@@ -1,9 +1,39 @@
-//! 由于已经决定了Rust为唯一Native编程语言，就不需要考虑C的行为了
+//! 负责和解释器交互的部分
 //! 
-//! 数据类型和调用约定都可以直接使用Rust标准库
-#![allow(unused)]
+//! 此模块定义Key语言中原生模块可能用到的类型
 
-use std::{cell::UnsafeCell, collections::HashMap, mem::transmute};
+use std::collections::HashMap;
+use crate::Instance;
+
+static mut INTERN:fn(&[u8])-> Ident = |_|unsafe{std::mem::transmute(1usize)};
+/// 将字符串缓存为指针(和Key解释器用一个缓存池)
+pub fn intern(s:&[u8])-> Ident {
+  unsafe{ INTERN(s) }
+}
+
+pub static mut _KEY_LANG_PANIC:fn(&str)-> ! = |s|panic!("{}",s);
+/// 用Key解释器的报错
+#[macro_export]
+macro_rules! kpanic {($($arg:tt)*)=> {
+  unsafe{::key_native::key::_KEY_LANG_PANIC(&format!($($arg)*))}
+}}
+
+/// premain函数接收的函数表
+#[repr(C)]
+struct PreMain {
+  intern: fn(&[u8])-> Ident,
+  err: fn(&str)->!,
+  find_var: fn(Scope, Ident)-> Option<LitrRef>,
+}
+
+#[no_mangle]
+extern fn premain(module: &PreMain) {
+  unsafe {
+    INTERN = module.intern;
+    _KEY_LANG_PANIC = module.err;
+    FIND_VAR = module.find_var;
+  }
+}
 
 /// 一个合法的标识符, 可以理解为字符串的指针
 #[derive(Debug, Clone, Copy)]
@@ -26,13 +56,14 @@ impl std::ops::Deref for Ident {
     &*self.p
   }
 }
-impl std::fmt::Display for Ident{
+impl std::fmt::Display for Ident {
   fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
     f.write_str(&self.str())
   }
 }
 
-static mut FIND_VAR:fn(Scope, Ident)->Option<LitrRef> = |_,_|None;
+pub(super) static mut FIND_VAR:fn(Scope, Ident)-> Option<LitrRef> = |_,_|None;
+
 #[derive(Debug, Clone, Copy)]
 pub struct Scope(*mut ());
 impl Scope {
@@ -60,6 +91,14 @@ pub enum Litr {
   Sym    (Symbol)
 }
 
+/// 函数枚举
+#[derive(Debug, Clone)]
+pub enum Function {
+  Local(Box<()>),
+  Extern(Box<()>),
+  Native(fn(Vec<Litr>)-> Litr)
+}
+
 #[derive(Debug, Clone)]
 pub enum Symbol {
   IterEnd,
@@ -70,24 +109,6 @@ impl Symbol {
     Litr::Sym(Symbol::IterEnd)
   }
 }
-
-/// 原生类型实例
-#[repr(C)]
-#[derive(Debug, Clone)]
-pub struct Instance {
-  pub v: usize,
-  pub w: usize,
-  pub cls: Class
-}
-
-/// 函数枚举
-#[derive(Debug, Clone)]
-pub enum Function {
-  Local(Box<()>),
-  Extern(Box<()>),
-  Native(fn(Vec<Litr>)-> Litr)
-}
-
 
 /// 可能是引用的Litr
 pub enum LitrRef {
@@ -119,154 +140,4 @@ impl std::ops::DerefMut for LitrRef {
       LitrRef::Own(b)=> b
     }
   }
-}
-
-
-pub type NativeFn = fn(Vec<LitrRef>, Scope)-> Litr;
-pub type NativeMethod = fn(&mut Instance, args:Vec<LitrRef>, Scope)-> Litr;
-
-/// intern函数本体。将其pub是未定义行为。
-static mut INTERN:fn(&[u8])-> Ident = |_|unsafe{std::mem::transmute(1usize)};
-/// 将字符串缓存为指针
-pub fn intern(s:&[u8])-> Ident {
-  unsafe{ INTERN(s) }
-}
-
-static mut ERR:fn(&str)->! = |s|panic!("{}",s);
-pub fn err(s:&str)->! {
-  unsafe {ERR(s)}
-}
-
-/// 原生类型定义
-#[repr(C)]
-#[derive(Debug, Clone)]
-pub struct ClassInner {
-  name: Ident,
-  statics: Vec<(Ident, NativeFn)>,
-  methods: Vec<(Ident, NativeMethod)>,
-  getter: fn(&Instance, get:Ident)-> Litr,
-  setter: fn(&mut Instance, set:Ident, to:Litr),
-  index_get: fn(&Instance, LitrRef)-> Litr,
-  index_set: fn(&mut Instance, LitrRef, LitrRef),
-  next: fn(&mut Instance)-> Litr,
-  to_str: fn(&Instance)-> String,
-  onclone: fn(&Instance)-> Instance,
-  ondrop: fn(&mut Instance)
-}
-
-/// 原生类型指针
-#[repr(transparent)]
-#[derive(Debug)]
-pub struct Class {
-  p: UnsafeCell<*mut ClassInner>
-}
-impl Clone for Class {
-  fn clone(&self) -> Self {
-    Class {p: UnsafeCell::new(unsafe{*self.p.get()})}
-  }
-}
-
-unsafe impl Sync for Class {}
-
-macro_rules! impl_class_setter {($($doc:literal $f:ident($t:ty);)*) => {
-  $(
-    #[doc = $doc]
-    pub fn $f(&self, f:$t) {
-      unsafe{(**self.p.get()).$f = f;}
-    }
-  )*
-}}
-impl Class {
-  /// 为static创建一个空指针
-  /// 
-  /// 要在此后调用其new方法才能访问
-  pub const fn uninit()-> Self {
-    Class { p: UnsafeCell::new(std::ptr::null_mut()) }
-  }
-  /// 为Class内部创建一个新类
-  /// 
-  /// 重复调用会引起一个ClassInner的内存泄漏
-  pub fn new(&self, name:&str) {
-    let v = ClassInner { 
-      name:intern(name.as_bytes()), 
-      getter:|_,_|Litr::Uninit, 
-      setter:|_,_,_|(), 
-      statics: Vec::new(), 
-      methods: Vec::new() ,
-      index_get:|_,_|Litr::Uninit, 
-      index_set:|_,_,_|(),
-      next:|_|Symbol::iter_end(), 
-      to_str: |v|format!("{} {{ Native }}", unsafe{&**v.cls.p.get()}.name),
-      onclone:|v|v.clone(), 
-      ondrop:|_|()
-    };
-    unsafe{*self.p.get() = Box::into_raw(Box::new(v))}
-  }
-  /// 为此类创建一个实例
-  /// 
-  /// v是两个指针长度的内容，可以传任何东西然后as或者transmute
-  pub fn create(&self, v:usize, w:usize)-> Litr {
-    Litr::Ninst(Instance { cls: self.clone(), v, w })
-  }
-  impl_class_setter!{
-    "设置getter, 用来处理`.`运算符"
-    getter(fn(&Instance, get:Ident)-> Litr);
-    "设置setter, 用来处理a.b = c的写法"
-    setter(fn(&mut Instance, set:Ident, to:Litr));
-    "设置index getter, 返回a[i]的值"
-    index_get(fn(&Instance, LitrRef)-> Litr);
-    "设置index setter, 处理a[i] = b"
-    index_set(fn(&mut Instance, LitrRef, LitrRef));
-    "设置迭代器, 处理for n:instance {}"
-    next(fn(&mut Instance)-> Litr);
-    "自定义复制行为(往往是赋值和传参)"
-    onclone(fn(&Instance)-> Instance);
-    "自定义垃圾回收回收行为(只需要写额外工作,不需要drop此指针)"
-    ondrop(fn(&mut Instance));
-    "自定义Str::from得到的字符串"
-    to_str(fn(&Instance)-> String);
-  }
-  /// 添加一个方法
-  pub fn method(&self, name:&str, f:NativeMethod) {
-    unsafe{(**self.p.get()).methods.push((intern(name.as_bytes()), f));}
-  }
-  /// 添加一个静态方法
-  pub fn static_method(&self, name:&str, f:NativeFn) {
-     unsafe{(**self.p.get()).statics.push((intern(name.as_bytes()), f));}
-  }
-}
-
-/// Ks解释器对Native做出的接口
-/// 
-/// 在main外调用内部函数是UB
-#[repr(C)]
-pub struct NativeInterface {
-  intern: fn(&[u8])-> Ident,
-  err: fn(&str)->!,
-  find_var: fn(Scope, Ident)-> Option<LitrRef>,
-  funcs: *mut Vec<(Ident, NativeFn)>,
-  classes: *mut Vec<Class>
-}
-
-impl NativeInterface {
-  /// 导出函数
-  pub fn export_fn(&mut self, name:&str, f:NativeFn) {
-    unsafe{&mut *self.funcs}.push((intern(name.as_bytes()), f))
-  }
-  /// 导出一个类
-  /// 
-  /// 可以提前调用此函数，之后再追加方法
-  pub fn export_cls(&mut self, cls:Class) {
-    unsafe{&mut *self.classes}.push(cls);
-  }
-}
-
-#[export_name = "keymain"]
-extern fn _main(module: &mut NativeInterface) {
-  unsafe {
-    INTERN = module.intern;
-    ERR = module.err;
-    FIND_VAR = module.find_var;
-  }
-  crate::main(module);
 }

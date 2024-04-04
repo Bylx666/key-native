@@ -1,10 +1,10 @@
 [package]
 name = "key-native"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
-description = "Key-lang's Standart library for native module"
+description = "Key-lang's Standart Library for Native Module"
 license = "MPL-2.0"
 
 [lib]
-crate-type = ["cdylib"]
+crate-type = ["lib"]
 
