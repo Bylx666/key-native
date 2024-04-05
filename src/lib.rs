@@ -1,4 +1,7 @@
-
+//! Key语言的Native Module库
+//! 
+//! 参见[Native Module开发](https://docs.subkey.top/native)
+//! 
 //! 由于已经决定了Rust为唯一Native编程语言，就不需要考虑C的行为了
 //! 
 //! 数据类型都可以直接使用Rust标准库, 调用约定也可以使用extern "Rust"
@@ -143,7 +146,16 @@ impl NativeModule {
   }
 }
 
+/// 将全局panic用kpanic代理
+pub fn use_kpanic() {
+  std::panic::set_hook(Box::new(|inf|{
+    let s = if let Some(s) = inf.payload().downcast_ref::<String>() {s}
+    else if let Some(s) = inf.payload().downcast_ref::<&str>() {s}else {"错误"};
+    unsafe{key::_KEY_LANG_PANIC(s)};
+  }));
+}
+
 pub mod prelude {
-  pub use crate::key::{Litr, LitrRef};
+  pub use crate::key::{Litr, LitrRef, Scope};
   pub use crate::{NativeModule, Class, kpanic};
 }
