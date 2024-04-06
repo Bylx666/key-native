@@ -13,8 +13,8 @@ pub mod key;
 use key::*;
 
 /// 原生类型实例
-#[repr(C)]
 #[derive(Debug, Clone)]
+#[repr(C)]
 pub struct Instance {
   pub v: usize,
   pub w: usize,
@@ -28,12 +28,12 @@ pub type NativeFn = fn(Vec<LitrRef>, Scope)-> Litr;
 pub type NativeMethod = fn(&mut Instance, args:Vec<LitrRef>, Scope)-> Litr;
 
 /// 原生类型定义
-#[repr(C)]
 #[derive(Debug, Clone)]
+#[repr(C)]
 struct ClassInner {
-  name: Ident,
   statics: Vec<(Ident, NativeFn)>,
   methods: Vec<(Ident, NativeMethod)>,
+  name: Ident,
   getter: fn(&Instance, get:Ident)-> Litr,
   setter: fn(&mut Instance, set:Ident, to:Litr),
   index_get: fn(&Instance, LitrRef)-> Litr,
@@ -78,7 +78,6 @@ impl Class {
   /// 重复调用会引起一个ClassInner的内存泄漏
   pub fn new(&self, name:&str) {
     let v = ClassInner { 
-      name:intern(name.as_bytes()), 
       getter:|_,_|Litr::Uninit, 
       setter:|_,_,_|(), 
       statics: Vec::new(), 
@@ -88,9 +87,11 @@ impl Class {
       next:|_|Symbol::iter_end(), 
       to_str: |v|format!("{} {{ Native }}", unsafe{&**v.cls.p.get()}.name),
       onclone:|v|v.clone(), 
-      ondrop:|_|()
+      ondrop:|_|(),
+      name:intern(name.as_bytes())
     };
-    unsafe{*self.p.get() = Box::into_raw(Box::new(v))}
+    let p = Box::into_raw(Box::new(v));
+    unsafe{*self.p.get() = p}
   }
   /// 为此类创建一个实例
   /// 
@@ -142,20 +143,39 @@ impl NativeModule {
   /// 
   /// 可以提前调用此函数，之后再追加方法
   pub fn export_cls(&mut self, cls:Class) {
+    unsafe {
+      println!("{:?}",(**cls.p.get()));
+    }
     unsafe{&mut *self.classes}.push(cls);
   }
 }
 
-/// 将全局panic用kpanic代理
-pub fn use_kpanic() {
-  std::panic::set_hook(Box::new(|inf|{
-    let s = if let Some(s) = inf.payload().downcast_ref::<String>() {s}
-    else if let Some(s) = inf.payload().downcast_ref::<&str>() {s}else {"错误"};
-    unsafe{key::_KEY_LANG_PANIC(s)};
-  }));
+#[macro_export]
+macro_rules! get_arg {
+  ($args:ident[$i:literal])=> {
+    get_arg!("该函数" $args[$i])
+  };
+  ($f:literal $args:ident[$i:literal])=> {
+    match $args.get($i) {
+      Some(v)=> &**v,
+      _=> panic!("{}至少需要{}个参数", $f, $i+1)
+    }
+  };
+  ($args:ident[$i:literal]:$t:ident)=> {
+    get_arg!("该函数" $args[$i]:$t)
+  };
+  ($f:literal $args:ident[$i:literal]:$t:ident)=> {
+    match $args.get($i) {
+      Some(v)=> match &**v {
+        Litr::$t(v)=> v,
+        _=> panic!("{}第{}个参数必须是{}", $f, $i+1, stringify!($t))
+      },
+      _=> panic!("{}至少需要{}个参数", $f, $i+1)
+    }
+  }
 }
 
 pub mod prelude {
   pub use crate::key::{Litr, LitrRef, Scope};
-  pub use crate::{NativeModule, Class, kpanic};
+  pub use crate::{NativeModule, Class, get_arg};
 }

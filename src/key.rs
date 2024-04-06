@@ -5,33 +5,39 @@
 use std::collections::HashMap;
 use crate::Instance;
 
-static mut INTERN:fn(&[u8])-> Ident = |_|unsafe{std::mem::transmute(1usize)};
-/// 将字符串缓存为指针(和Key解释器用一个缓存池)
-pub fn intern(s:&[u8])-> Ident {
-  unsafe{ INTERN(s) }
-}
-
-pub static mut _KEY_LANG_PANIC:fn(&str)-> ! = |s|panic!("{}",s);
-/// 用Key解释器的报错
-#[macro_export]
-macro_rules! kpanic {($($arg:tt)*)=> {
-  unsafe{::key_native::key::_KEY_LANG_PANIC(&format!($($arg)*))}
-}}
 
 /// premain函数接收的函数表
 #[repr(C)]
-struct PreMain {
-  intern: fn(&[u8])-> Ident,
-  err: fn(&str)->!,
-  find_var: fn(Scope, Ident)-> Option<LitrRef>,
+pub struct FuncTable {
+  pub intern: fn(&[u8])-> Ident,
+  pub err: fn(&str)->!,
+  pub find_var: fn(Scope, Ident)-> Option<LitrRef>,
+  pub let_var: fn(Scope, Ident, Litr),
+  pub const_var: fn(Scope, Ident),
+  pub call_local: fn(&LocalFunc, Vec<Litr>)-> Litr,
+  pub call_at: fn(Scope, *mut Litr, &LocalFunc, Vec<Litr>)-> Litr,
+  pub get_self: fn(Scope)-> *mut Litr,
+  pub outlive_inc: fn(Scope),
+  pub outlive_dec: fn(Scope)
+}
+pub static mut FUNCTABLE:*const FuncTable = std::ptr::null();
+
+/// 将字符串缓存为指针(和Key解释器用一个缓存池)
+pub fn intern(s:&[u8])-> Ident {
+  unsafe{ ((*FUNCTABLE).intern)(s) }
 }
 
 #[no_mangle]
-extern fn premain(module: &PreMain) {
+extern fn premain(table: &FuncTable) {
+  // 使用kpanic
+  std::panic::set_hook(Box::new(|inf|{
+    let s = if let Some(s) = inf.payload().downcast_ref::<String>() {s}
+    else if let Some(s) = inf.payload().downcast_ref::<&str>() {s}else {"错误"};
+    unsafe{((*FUNCTABLE).err)(s)};
+  }));
+
   unsafe {
-    INTERN = module.intern;
-    _KEY_LANG_PANIC = module.err;
-    FIND_VAR = module.find_var;
+    FUNCTABLE = table;
   }
 }
 
@@ -62,13 +68,24 @@ impl std::fmt::Display for Ident {
   }
 }
 
-pub(super) static mut FIND_VAR:fn(Scope, Ident)-> Option<LitrRef> = |_,_|None;
-
 #[derive(Debug, Clone, Copy)]
 pub struct Scope(*mut ());
 impl Scope {
+  /// 在此作用域找一个变量
   pub fn find_var(self, s:&str)-> Option<LitrRef> {
-    unsafe{FIND_VAR(self, intern(s.as_bytes()))}
+    unsafe{((*FUNCTABLE).find_var)(self, intern(s.as_bytes()))}
+  }
+  /// 在此作用域定义一个变量
+  pub fn let_var(self, s:&str, v:Litr) {
+    unsafe{((*FUNCTABLE).let_var)(self, intern(s.as_bytes()), v)}
+  }
+  /// 在此作用域锁定一个变量
+  pub fn const_var(self, s:&str) {
+    unsafe{((*FUNCTABLE).const_var)(self, intern(s.as_bytes()))}
+  }
+  /// 获取该作用域的self
+  pub fn get_self(self)-> *mut Litr {
+    unsafe{((*FUNCTABLE).get_self)(self)}
   }
 }
 
@@ -86,7 +103,7 @@ pub enum Litr {
   Buf    (Vec<u8>),
   List   (Vec<Litr>),
   Obj    (HashMap<Ident, Litr>),
-  Inst   (()),
+  Inst   ([usize;3]),
   Ninst  (Instance),
   Sym    (Symbol)
 }
@@ -94,10 +111,52 @@ pub enum Litr {
 /// 函数枚举
 #[derive(Debug, Clone)]
 pub enum Function {
-  Local(Box<()>),
-  Extern(Box<()>),
-  Native(fn(Vec<Litr>)-> Litr)
+  Native(crate::NativeFn),
+  Local(LocalFunc),
+  Extern([usize;4])
 }
+
+/// Key脚本内定义的本地函数
+#[derive(Debug)]
+#[repr(C)]
+pub struct LocalFunc {
+  ptr:*const (),
+  scope: Scope,
+}
+
+// 因为Key允许开发者实现事件循环一样的效果
+// 所以必须保证原生模块的函数持有Key函数时
+// 该Key函数不能过期(因此需要实现Clone和Drop)
+impl Clone for LocalFunc {
+  fn clone(&self) -> Self {
+    let scope = self.scope;
+    unsafe{((*FUNCTABLE).outlive_inc)(scope)};
+    LocalFunc { ptr: self.ptr, scope }
+  }
+}
+impl Drop for LocalFunc {
+  fn drop(&mut self) {
+    unsafe{((*FUNCTABLE).outlive_dec)(self.scope)}
+  }
+}
+
+impl LocalFunc {
+  /// 调用Key本地函数
+  pub fn call(&self, args:Vec<Litr>)-> Litr {
+    unsafe{((*FUNCTABLE).call_local)(self, args)}
+  }
+  /// 在指定作用域调用该函数
+  /// 
+  /// 比起call多了两个参数: 
+  /// 
+  /// - `scope`: 要执行在哪个作用域, 可以使用`f.scope`缺省
+  /// 
+  /// - `kself`: Key脚本中的`self`指向, 可以使用`f.scope.get_self()`缺省
+  pub fn call_at(&self, scope:Scope, kself:*mut Litr, args:Vec<Litr>)-> Litr {
+    unsafe{((*FUNCTABLE).call_at)(scope, kself, self, args)}
+  }
+}
+
 
 #[derive(Debug, Clone)]
 pub enum Symbol {
@@ -116,7 +175,7 @@ pub enum LitrRef {
   Own(Litr)
 }
 impl LitrRef {
-  /// 消耗CalcRef返回内部值
+  /// 消耗CalcRef获取Litr所有权
   pub fn own(self)-> Litr {
     match self {
       LitrRef::Ref(p)=> unsafe {(*p).clone()}
