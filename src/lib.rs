@@ -24,6 +24,12 @@ pub struct Instance {
   /// 实例的原生类指针
   pub cls: Class
 }
+
+/// drop出错时可以判断你是不是没设置clone函数
+fn default_onclone(v:&Instance)-> Instance {
+  v.clone()
+}
+
 impl Instance {
   /// 以T的格式读取v值, 请保证v是有效指针且可写
   /// 
@@ -31,12 +37,45 @@ impl Instance {
   pub fn read<T>(&self)-> &mut T {
     unsafe { &mut*(self.v as *mut T) }
   }
+  /// w的read
+  pub fn readw<T>(&self)-> &mut T {
+    unsafe { &mut*(self.w as *mut T) }
+  }
+
   /// 执行T的析构函数, 并把v覆盖为新值
   /// 
   /// 请务必保证set前后的指针类型相同
   pub fn set<T>(&mut self, v:T) {
-    unsafe { std::ptr::drop_in_place(self.v as *mut T) }
+    self.dropv::<T>();
     self.v = to_ptr(v);
+  }
+  /// w的set
+  pub fn setw<T>(&mut self, w:T) {
+    self.dropw::<T>();
+    self.w = to_ptr(w);
+  }
+
+  /// 不pub, 所以不管安全性
+  fn dealloc<T>(&self, p:*mut T) {
+    assert!(!p.is_null(), "无法析构空指针.{}\n  详见https://docs.subkey.top/native/4.class", {
+      if unsafe{&**self.cls.p.get()}.onclone == default_onclone 
+        {"\n  你或许应该为class定义onclone"}else {""}
+    });
+    unsafe {
+      std::ptr::drop_in_place(p);
+      let lo = std::alloc::Layout::new::<T>();
+      std::alloc::dealloc(p as _, lo);
+    }
+  }
+  /// 将v作为T的指针, 将T的内存释放
+  pub fn dropv<T>(&mut self) {
+    self.dealloc(self.v as *mut T);
+    self.v = 0;
+  }
+  /// w版drop
+  pub fn dropw<T>(&mut self) {
+    self.dealloc(self.w as *mut T);
+    self.w = 0;
   }
 }
 
@@ -113,9 +152,9 @@ impl Class {
       methods: Vec::new() ,
       index_get:|_,_|Litr::Uninit, 
       index_set:|_,_,_|(),
-      next:|_|Symbol::iter_end(), 
+      next:|_|key::Sym::iter_end(), 
       to_str: |v|format!("{} {{ Native }}", unsafe{&**v.cls.p.get()}.name),
-      onclone:|v|v.clone(), 
+      onclone:default_onclone, 
       ondrop:|_|(),
       name:intern(name.as_bytes())
     };
@@ -125,9 +164,15 @@ impl Class {
   /// 为此类创建一个实例
   /// 
   /// v是两个指针长度的内容，可以传任何东西然后as或者transmute
-  pub fn create(&self, v:usize, w:usize)-> Litr {
+  pub fn create_raw(&self, v:usize, w:usize)-> Instance {
     self.assert();
-    Litr::Ninst(Instance { cls: self.clone(), v, w })
+    Instance { cls: self.clone(), v, w }
+  }
+  /// 为此类创建一个实例并包装为Litr
+  /// 
+  /// v是两个指针长度的内容，可以传任何东西然后as或者transmute
+  pub fn create(&self, v:usize, w:usize)-> Litr {
+    Litr::Ninst(self.create_raw(v, w))
   }
   impl_class_setter!{
     "设置getter, 用来处理`.`运算符"
@@ -156,6 +201,12 @@ impl Class {
   pub fn static_method(&self, name:&str, f:NativeFn) {
     self.assert();
     unsafe{(**self.p.get()).statics.push((intern(name.as_bytes()), f));}
+  }
+}
+
+impl PartialEq for Class {
+  fn eq(&self, other: &Self) -> bool {
+    unsafe{*self.p.get() == *other.p.get()}
   }
 }
 
@@ -205,7 +256,7 @@ macro_rules! get_arg {
   }
 }
 
-/// 将一个值转为方便实例储存的指针
+/// 将一个非指针的值转为方便实例储存的指针
 #[inline]
 pub fn to_ptr<T>(v:T)-> usize {
   Box::into_raw(Box::new(v)) as usize

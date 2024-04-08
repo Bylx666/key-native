@@ -21,7 +21,8 @@ pub struct FuncTable {
   pub get_self: fn(Scope)-> *mut Litr,
   pub get_parent: fn(Scope)-> Option<Scope>,
   pub outlive_inc: fn(Scope),
-  pub outlive_dec: fn(Scope)
+  pub outlive_dec: fn(Scope),
+  pub symcls: fn()-> crate::Class
 }
 pub static mut FUNCTABLE:*const FuncTable = std::ptr::null();
 
@@ -131,9 +132,7 @@ pub enum Litr {
   /// 本地声明的类实例, 原生模块不可干涉
   Inst   ([usize;3]),
   /// 原生模块的类实例`m-:A::new()`
-  Ninst  (Instance),
-  /// `Sym::..`
-  Sym    (Symbol)
+  Ninst  (Instance)
 }
 
 /// 函数枚举
@@ -203,14 +202,15 @@ impl LocalFunc {
 }
 
 
-#[derive(Debug, Clone)]
-pub enum Symbol {
-  IterEnd,
-  Reserved
-}
-impl Symbol {
+/// Key语言的语法标志
+pub struct Sym;
+impl Sym {
+  pub const ITER_END:usize = 1;
+  pub fn is_sym(v:&Instance)-> bool {
+    v.cls == (unsafe{&*FUNCTABLE}.symcls)()
+  }
   pub fn iter_end()-> Litr {
-    Litr::Sym(Symbol::IterEnd)
+    (unsafe{&*FUNCTABLE}.symcls)().create(Self::ITER_END, 0)
   }
 }
 

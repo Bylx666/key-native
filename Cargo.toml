@@ -1,6 +1,6 @@
 [package]
 name = "key-native"
-version = "0.1.3"
+version = "0.1.4"
 edition = "2021"
 description = "Key-lang's Standart Library for Native Module"
 license = "MPL-2.0"
