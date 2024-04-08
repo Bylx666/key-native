@@ -5,6 +5,7 @@
 //! 由于已经决定了Rust为唯一Native编程语言，就不需要考虑C的行为了
 //! 
 //! 数据类型都可以直接使用Rust标准库, 调用约定也可以使用extern "Rust"
+#![feature(const_ptr_is_null)]
 #![allow(unused)]
 
 use std::{cell::UnsafeCell, collections::HashMap, mem::transmute};
@@ -16,9 +17,27 @@ use key::*;
 #[derive(Debug, Clone)]
 #[repr(C)]
 pub struct Instance {
+  /// 原生类实例的第一个可用值
   pub v: usize,
+  /// 原生类实例的第二个可用值
   pub w: usize,
+  /// 实例的原生类指针
   pub cls: Class
+}
+impl Instance {
+  /// 以T的格式读取v值, 请保证v是有效指针且可写
+  /// 
+  /// 虽说不带unsafe, 但还是很容易UB的
+  pub fn read<T>(&self)-> &mut T {
+    unsafe { &mut*(self.v as *mut T) }
+  }
+  /// 执行T的析构函数, 并把v覆盖为新值
+  /// 
+  /// 请务必保证set前后的指针类型相同
+  pub fn set<T>(&mut self, v:T) {
+    unsafe { std::ptr::drop_in_place(self.v as *mut T) }
+    self.v = to_ptr(v);
+  }
 }
 
 
@@ -37,7 +56,7 @@ struct ClassInner {
   getter: fn(&Instance, get:Ident)-> Litr,
   setter: fn(&mut Instance, set:Ident, to:Litr),
   index_get: fn(&Instance, LitrRef)-> Litr,
-  index_set: fn(&mut Instance, LitrRef, LitrRef),
+  index_set: fn(&mut Instance, LitrRef, Litr),
   next: fn(&mut Instance)-> Litr,
   to_str: fn(&Instance)-> String,
   onclone: fn(&Instance)-> Instance,
@@ -62,6 +81,7 @@ macro_rules! impl_class_setter {($($doc:literal $f:ident($t:ty);)*) => {
   $(
     #[doc = $doc]
     pub fn $f(&self, f:$t) {
+      self.assert();
       unsafe{(**self.p.get()).$f = f;}
     }
   )*
@@ -72,6 +92,15 @@ impl Class {
   /// 要在此后调用其new方法才能访问
   pub const fn uninit()-> Self {
     Class { p: UnsafeCell::new(std::ptr::null_mut()) }
+  }
+  #[inline]
+  /// 判断是否new过了
+  const fn assert(&self) {
+    unsafe{
+      assert!(!(
+        *((&self.p) as *const UnsafeCell<*mut ClassInner> as *const *mut ClassInner)
+      ).is_null(), "请先为Class调用new方法"
+    )}
   }
   /// 为Class内部创建一个新类
   /// 
@@ -97,6 +126,7 @@ impl Class {
   /// 
   /// v是两个指针长度的内容，可以传任何东西然后as或者transmute
   pub fn create(&self, v:usize, w:usize)-> Litr {
+    self.assert();
     Litr::Ninst(Instance { cls: self.clone(), v, w })
   }
   impl_class_setter!{
@@ -107,7 +137,7 @@ impl Class {
     "设置index getter, 返回a[i]的值"
     index_get(fn(&Instance, LitrRef)-> Litr);
     "设置index setter, 处理a[i] = b"
-    index_set(fn(&mut Instance, LitrRef, LitrRef));
+    index_set(fn(&mut Instance, LitrRef, Litr));
     "设置迭代器, 处理for n:instance {}"
     next(fn(&mut Instance)-> Litr);
     "自定义复制行为(往往是赋值和传参)"
@@ -119,11 +149,13 @@ impl Class {
   }
   /// 添加一个方法
   pub fn method(&self, name:&str, f:NativeMethod) {
+    self.assert();
     unsafe{(**self.p.get()).methods.push((intern(name.as_bytes()), f));}
   }
   /// 添加一个静态方法
   pub fn static_method(&self, name:&str, f:NativeFn) {
-     unsafe{(**self.p.get()).statics.push((intern(name.as_bytes()), f));}
+    self.assert();
+    unsafe{(**self.p.get()).statics.push((intern(name.as_bytes()), f));}
   }
 }
 
@@ -143,9 +175,7 @@ impl NativeModule {
   /// 
   /// 可以提前调用此函数，之后再追加方法
   pub fn export_cls(&mut self, cls:Class) {
-    unsafe {
-      println!("{:?}",(**cls.p.get()));
-    }
+    cls.assert();
     unsafe{&mut *self.classes}.push(cls);
   }
 }
@@ -175,7 +205,13 @@ macro_rules! get_arg {
   }
 }
 
+/// 将一个值转为方便实例储存的指针
+#[inline]
+pub fn to_ptr<T>(v:T)-> usize {
+  Box::into_raw(Box::new(v)) as usize
+}
+
 pub mod prelude {
-  pub use crate::key::{Litr, LitrRef, Scope};
-  pub use crate::{NativeModule, Class, get_arg};
+  pub use crate::key::{Litr, LitrRef, Scope, Ident};
+  pub use crate::{NativeModule, Class, get_arg, Instance, to_ptr};
 }
