@@ -234,25 +234,27 @@ impl NativeModule {
 #[macro_export]
 macro_rules! get_arg {
   ($args:ident[$i:literal])=> {
-    get_arg!("该函数" $args[$i])
-  };
-  ($f:literal $args:ident[$i:literal])=> {
     match $args.get($i) {
       Some(v)=> &**v,
-      _=> panic!("{}至少需要{}个参数", $f, $i+1)
+      _=> panic!("至少需要{}个参数", $i+1)
     }
   };
   ($args:ident[$i:literal]:$t:ident)=> {
-    get_arg!("该函数" $args[$i]:$t)
-  };
-  ($f:literal $args:ident[$i:literal]:$t:ident)=> {
     match $args.get($i) {
       Some(v)=> match &**v {
         Litr::$t(v)=> v,
-        _=> panic!("{}第{}个参数必须是{}", $f, $i+1, stringify!($t))
+        _=> panic!("第{}个参数必须是{}", $i+1, stringify!($t))
       },
-      _=> panic!("{}至少需要{}个参数", $f, $i+1)
+      _=> panic!("至少需要{}个参数", $i+1)
     }
+  };
+  ($args:ident[$i:literal]:$t:ident?$def:expr)=> {
+    $args.get($i).map_or($def, |val|{
+      match &**val {
+        Litr::$t(n)=> *n as u64,
+        _=> $def
+      }
+    });
   }
 }
 
@@ -260,6 +262,28 @@ macro_rules! get_arg {
 #[inline]
 pub fn to_ptr<T>(v:T)-> usize {
   Box::into_raw(Box::new(v)) as usize
+}
+
+/// 增加该作用域的引用计数
+/// 
+/// 警告: 你应当在作用域用完时, 
+/// 为此调用对应的`outlive_dec`,
+/// 否则会导致该作用域以上所有作用域无法回收
+pub fn outlive_inc(s:Scope) {
+  unsafe{((*FUNCTABLE).outlive_inc)(s)};
+}
+/// 减少该作用域的引用计数
+pub fn outlive_dec(s:Scope) {
+  unsafe{((*FUNCTABLE).outlive_dec)(s)};
+}
+
+/// 阻塞主线程的计数+1
+pub fn wait_inc() {
+  unsafe{((*FUNCTABLE).wait_inc)()};
+}
+/// 阻塞主线程的计数-1
+pub fn wait_dec() {
+  unsafe{((*FUNCTABLE).wait_dec)()};
 }
 
 pub mod prelude {

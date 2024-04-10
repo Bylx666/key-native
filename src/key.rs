@@ -22,7 +22,9 @@ pub struct FuncTable {
   pub get_parent: fn(Scope)-> Option<Scope>,
   pub outlive_inc: fn(Scope),
   pub outlive_dec: fn(Scope),
-  pub symcls: fn()-> crate::Class
+  pub symcls: fn()-> crate::Class,
+  pub wait_inc: fn(),
+  pub wait_dec: fn()
 }
 pub static mut FUNCTABLE:*const FuncTable = std::ptr::null();
 
@@ -104,6 +106,8 @@ impl Scope {
   }
 }
 
+unsafe impl Send for Scope {}
+
 /// Key语言中的基本类型
 #[derive(Debug, Clone)]
 pub enum Litr {
@@ -167,6 +171,7 @@ pub struct LocalFunc {
   ptr:*const (),
   scope: Scope,
 }
+unsafe impl Send for LocalFunc {}
 
 // 因为Key允许开发者实现事件循环一样的效果
 // 所以必须保证原生模块的函数持有Key函数时
@@ -174,13 +179,13 @@ pub struct LocalFunc {
 impl Clone for LocalFunc {
   fn clone(&self) -> Self {
     let scope = self.scope;
-    unsafe{((*FUNCTABLE).outlive_inc)(scope)};
+    crate::outlive_inc(scope);
     LocalFunc { ptr: self.ptr, scope }
   }
 }
 impl Drop for LocalFunc {
   fn drop(&mut self) {
-    unsafe{((*FUNCTABLE).outlive_dec)(self.scope)}
+    crate::outlive_dec(self.scope)
   }
 }
 
@@ -198,6 +203,10 @@ impl LocalFunc {
   /// - `kself`: Key脚本中的`self`指向, 可以使用`f.scope.get_self()`缺省
   pub fn call_at(&self, scope:Scope, kself:*mut Litr, args:Vec<Litr>)-> Litr {
     unsafe{((*FUNCTABLE).call_at)(scope, kself, self, args)}
+  }
+  /// 获取函数定义处的作用域
+  pub fn scope(&self)-> Scope {
+    self.scope
   }
 }
 
