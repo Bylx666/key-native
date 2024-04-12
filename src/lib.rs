@@ -14,7 +14,7 @@ pub mod key;
 use key::*;
 
 /// 原生类型实例
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 #[repr(C)]
 pub struct Instance {
   /// 原生类实例的第一个可用值
@@ -23,6 +23,19 @@ pub struct Instance {
   pub w: usize,
   /// 实例的原生类指针
   pub cls: Class
+}
+
+impl Clone for Instance {
+  /// 调用自定义clone (key-native库中的默认clone行为也可用)
+  fn clone(&self) -> Self {
+    unsafe{((**self.cls.p.get()).onclone)(self)}
+  }
+}
+impl Drop for Instance {
+  /// 调用自定义drop (key-native的默认drop不做任何事)
+  fn drop(&mut self) {
+    unsafe{((**self.cls.p.get()).ondrop)(self)}
+  }
 }
 
 /// drop出错时可以判断你是不是没设置clone函数
@@ -114,6 +127,7 @@ impl Clone for Class {
   }
 }
 
+unsafe impl Send for Class {}
 unsafe impl Sync for Class {}
 
 macro_rules! impl_class_setter {($($doc:literal $f:ident($t:ty);)*) => {

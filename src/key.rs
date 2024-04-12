@@ -24,7 +24,11 @@ pub struct FuncTable {
   pub outlive_dec: fn(Scope),
   pub symcls: fn()-> crate::Class,
   pub wait_inc: fn(),
-  pub wait_dec: fn()
+  pub wait_dec: fn(),
+  pub planet_new: fn()-> (*mut (), crate::Class),
+  pub planet_ok: fn(*mut (), Litr),
+  pub local_instance_clone: fn(&[usize;3])-> [usize;3],
+  pub local_instance_drop: fn(&mut[usize;3]),
 }
 pub static mut FUNCTABLE:*const FuncTable = std::ptr::null();
 
@@ -139,6 +143,10 @@ pub enum Litr {
   Ninst  (Instance)
 }
 
+// SAFETY: 这确实不安全, 伙计
+unsafe impl Send for Litr {}
+unsafe impl Sync for Litr {}
+
 /// 函数枚举
 #[derive(Debug, Clone)]
 pub enum Function {
@@ -210,6 +218,18 @@ impl LocalFunc {
   }
 }
 
+struct LocalInstance([usize;3]);
+impl Clone for LocalInstance {
+  fn clone(&self) -> Self {
+    LocalInstance((unsafe{&*FUNCTABLE}.local_instance_clone)(&self.0))
+  }
+}
+impl Drop for LocalInstance {
+  fn drop(&mut self) {
+    (unsafe{&*FUNCTABLE}.local_instance_drop)(&mut self.0)
+  }
+}
+
 
 /// Key语言的语法标志
 pub struct Sym;
@@ -263,5 +283,29 @@ impl std::ops::DerefMut for LitrRef {
 impl Debug for LitrRef {
   fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
     f.write_fmt(format_args!("{:?}", &**self))
+  }
+}
+
+/// planet的内部拨号员, 可调用ok代表Planet结束
+pub struct PlanetCaller(*mut ());
+impl PlanetCaller {
+  /// 完成该次行星异步任务, 传入结果值
+  pub fn ok(&self, v:Litr) {
+    unsafe {((*FUNCTABLE).planet_ok)(self.0, v)}
+  }
+}
+// SAFETY: Ok只有第一次调用有用, 且不可复制
+unsafe impl Send for PlanetCaller {}
+unsafe impl Sync for PlanetCaller {}
+
+pub struct Planet;
+impl Planet {
+  /// 传入一个接受caller的闭包, 创建一个Planet的原生实例
+  /// 
+  /// 目前无法在原生模块中直接操作Planet, 因此该函数的返回值请直接返回给你的函数
+  pub fn new(f:impl FnOnce(PlanetCaller))-> Litr {
+    let (planet, planet_cls) = unsafe {((*FUNCTABLE).planet_new)()};
+    f(PlanetCaller(planet));
+    Litr::Ninst(Instance {cls:planet_cls, v:planet as _, w:0})
   }
 }
