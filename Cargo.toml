@@ -2,8 +2,11 @@
 name = "key-native"
 version = "0.1.5"
 edition = "2021"
-description = "Key-lang's Standart Library for Native Module"
+description = "Key Lang 原生模块库"
 license = "MPL-2.0"
+repository = "https://github.com/bylx666/key-native"
+homepage = "https://docs.subkey.top"
+documentation = "https://docs.subkey.top/native"
 
 [lib]
 crate-type = ["lib"]
