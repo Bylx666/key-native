@@ -1,6 +1,6 @@
 [package]
 name = "key-native"
-version = "0.1.5"
+version = "0.1.6"
 edition = "2021"
 description = "Key Lang 原生模块库"
 license = "MPL-2.0"
