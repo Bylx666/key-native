@@ -247,6 +247,9 @@ impl NativeModule {
 
 #[macro_export]
 macro_rules! get_arg {
+  ($args:ident[$i:literal]?)=> {
+    $args.get($i).map_or(&Litr::Uninit, |n|&**n)
+  };
   ($args:ident[$i:literal])=> {
     match $args.get($i) {
       Some(v)=> &**v,

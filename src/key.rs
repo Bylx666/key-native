@@ -113,8 +113,9 @@ impl Scope {
 unsafe impl Send for Scope {}
 
 /// Key语言中的基本类型
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub enum Litr {
+  #[default]
   /// `()`, `uninit`
   Uninit,
 
